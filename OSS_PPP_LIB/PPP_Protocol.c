@@ -11,7 +11,7 @@
 **    PPP_Recv
 **
 ** 设计注记:
-**			一次send最大不能超过16777216字节（16MB）
+**	  一次send最大不能超过16777216字节（16MB）
 **
 **
 ** 更改历史:
@@ -181,7 +181,8 @@ int PPP_Recv(void * const Handler, void * const Buffer, int const MaxBytes)
 {
 	PPP_INNER_TYPE *pPPP = (PPP_INNER_TYPE*)Handler;
 	unsigned char *StreamBuf, *pDatagram, CheckSum;
-	int pW_RecvBuf, pR_RecvBuf, ret_val, Available, Length, i;
+	int pW_RecvBuf, pR_RecvBuf, ret_val, Available;
+	int Length, i;
 
 	if (pPPP == NULL)
 		return -1;
@@ -214,6 +215,9 @@ int PPP_Recv(void * const Handler, void * const Buffer, int const MaxBytes)
 				if (   (Length > (MaxBytes + 7)) /*MaxBytes理论上不应小于最大数据报长度(帧长度-帧头-校验和-4字节长度-帧尾)*/
 					|| (Length > (pPPP->RecvBuf_LenBytes >> 1)) ) /*为避免Available永远小于Length, 要求缓存长度至少是最大帧长度的两倍*/
 					ret_val = -2; /*长度异常(例如帧长度传输中出现差错被放大), 重新匹配帧标志字段*/
+				else if (Length < 0){
+					ret_val = -2;
+				}
 				else if (Available >= Length)
 				{
 					if (StreamBuf[pR_RecvBuf + Length - 1] == 0x5A)

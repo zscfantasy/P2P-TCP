@@ -1,15 +1,15 @@
 /*-----------------------------------------------------------
 **
-** 版权:    中国航空无线电电子研究所, 2017年
+** 版权:    
 **
 ** 文件名:  TCP_Driver.h
 **
-** 描述:    声明了tcp通信所开放的所有接口
+** 描述:    声明了TCP通信所开放的所有接口
 **
 ** 设计注记:
 **
 ** 作者:
-**     章诗晨, 2017年1月开始编写本文件
+**     zsc, 2022年6月开始编写本文件
 **
 ** 更改历史:
 **    2017年1月3日  创建本文件
@@ -43,14 +43,12 @@ extern "C" {
 		int(*Send)(void * const Handler, void * const Payload, int const LenBytes);
 		int(*Recv)(void * const Handler, void * const Buffer, int const MaxBytes);
 
-		char TCP_Data[72];
+		char TCP_Data[128];
 	} TCP_STRUCT_TYPE;
 
 	int TCP_Init(TCP_STRUCT_TYPE * const Handler, unsigned int const Peer_IP, unsigned short const Peer_Recv_Port,
-		unsigned int const Self_IP, unsigned short const Self_Recv_Port, int const Recv_Cache, int const Recv_Block_Mode, int const Mode);
+		unsigned int const Self_IP, unsigned short const Self_Recv_Port, int const Recv_Cache, int const Recv_Block_Mode, int const Type, int const Mode);
 
-	int TCP_Connect(void * const Handler);
-	int TCP_Accept(void * const Handler);
 #ifdef __cplusplus
 }
 #endif
