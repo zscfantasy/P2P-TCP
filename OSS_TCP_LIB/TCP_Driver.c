@@ -67,11 +67,13 @@
 	#include "TCP_Driver.h"
 
 #if TCP_UNDER_VXWORKS == 2
-	#ifndef SOCKADDR
-        //typedef struct sockaddr SOCKADDR;
-	#endif
 	#ifndef SYLIXOS
 		typedef unsigned int SOCKET;
+    #else
+    #include <sys/select.h>
+    #ifndef SOCKADDR
+        typedef struct sockaddr SOCKADDR;
+    #endif
 	#endif
 #endif
 
@@ -185,7 +187,8 @@ int TCP_Connect(TCP_STRUCT_TYPE * const Handler)
 		{
 			err = errnoGet();
 			/*非阻塞模式下的操作 -2是正常现象 -4是非正常情况，需要清socket*/
-			if (err == EWOULDBLOCK || err == EINVAL){
+			if (err == EWOULDBLOCK || err == EINVAL || err == EALREADY){
+			    //printf("TCP SOCK %d connected, ret = %d, errno = %d\n", pTCP->Recv_Socket, ret_val, err);
 				taskDelay(sysClkRateGet() / 500);
 				pTCP->Connected = 0;
 				ret_val = -2;
@@ -195,7 +198,7 @@ int TCP_Connect(TCP_STRUCT_TYPE * const Handler)
 				pTCP->Connected = 1;
 				ret_val = -3;
 			}else{
-				//printf("TCP SOCK %d connected err, ret = %d, errno = %d\n", pTCP->Recv_Socket, ret_val, WSAGetLastError());
+				//printf("TCP SOCK %d connected err, ret = %d, errno = %d\n", pTCP->Recv_Socket, ret_val, err);
 				//closesocket(pTCP->Recv_Socket);
 				//WSACleanup();
 				pTCP->Connected = 0;
@@ -419,15 +422,16 @@ int TCP_Send(void * const Handler, void * const Payload, int const LenBytes)
 			ret_val - -5;
 		}
 		if (pTCP->Type == 1){
-			pTCP->Connected = 0;   /*对于客户端而言，如果已经断开连接乐，需要重新connect，且重新初始化socket，才能连接上服务端。服务端不需要*/
+			pTCP->Connected = 0;   /*对于客户端而言，如果已经断开连接，需要重新connect，且重新初始化socket，才能连接上服务端。服务端不需要*/
 			#if TCP_UNDER_VXWORKS > 0
             	close(pTCP->Recv_Socket);
 			#else
 				closesocket(pTCP->Recv_Socket);
 			#endif
-			TCP_Init(pTCP, ntohl(pTCP->Peer_Recv_Address.sin_addr.s_addr), ntohs(pTCP->Peer_Recv_Address.sin_port),
+			TCP_Init(pTCP,  ntohl(pTCP->Peer_Recv_Address.sin_addr.s_addr), ntohs(pTCP->Peer_Recv_Address.sin_port),
 							ntohl(pTCP->Self_Recv_Address.sin_addr.s_addr), ntohs(pTCP->Self_Recv_Address.sin_port),
 							pTCP->CurCacheSize, TCP_RECV_NONBLK, 1, 0);
+
 			ret_val - -5;
 		}
 	}
@@ -532,12 +536,14 @@ int TCP_Recv(void * const Handler, void * const Buffer, int const MaxBytes)
 			TCP_Init(pTCP, ntohl(pTCP->Peer_Recv_Address.sin_addr.s_addr), ntohs(pTCP->Peer_Recv_Address.sin_port),
 							ntohl(pTCP->Self_Recv_Address.sin_addr.s_addr), ntohs(pTCP->Self_Recv_Address.sin_port),
 							pTCP->CurCacheSize, TCP_RECV_NONBLK, 1, 0);
+
 			ret_val = -5;
 		}	
 	}
 
 	return ret_val;
 }
+
 /* END of TCP_Recv */
 
 /*.BH-------------------------------------------------------------
@@ -659,6 +665,9 @@ int TCP_Server_Recv(void * const Handler, void * const Buffer, int const MaxByte
 	SockAddr_TYPE Source_Address;
 	int Source_AddrSize = sizeof(SockAddr_TYPE);
 	int ret_sel, ret_val, fd, i;
+    struct timeval timeout;
+    timeout.tv_sec = 0;
+    timeout.tv_usec = 0;
 
 	if (pTCP == NULL){
 		ret_val = -1;
@@ -677,8 +686,8 @@ int TCP_Server_Recv(void * const Handler, void * const Buffer, int const MaxByte
 	}
 
     //监听所有文件描述符(select的第一个参数取当前所有fd的最大值)
-	ret_sel = select(pTCP->Max_Fd + 1, pTCP->prfds, NULL, NULL, NULL);
-    if (ret_sel < 0) {
+	ret_sel = select(pTCP->Max_Fd + 1, pTCP->prfds, NULL, NULL, &timeout);
+    if (ret_sel <= 0) {
 #if TCP_UNDER_VXWORKS > 0
 		if (EINTR == errnoGet())
 			return 0;
@@ -686,7 +695,7 @@ int TCP_Server_Recv(void * const Handler, void * const Buffer, int const MaxByte
         if (WSAEINTR == WSAGetLastError())
 			return 0;
 #endif	
-        fprintf(stderr, "%s(): select() error: %d", __FUNCTION__, errno);
+        //fprintf(stderr, "%s(): select() error: %d", __FUNCTION__, errno);
         return -3;	//报错且不能再执行
     }
 	//这里是否要增加select返回值为0（超时）的情况？
@@ -765,6 +774,11 @@ int TCP_Client_Recv(void * const Handler, void * const Buffer, int const MaxByte
 	SockAddr_TYPE Source_Address;
 	int Source_AddrSize = sizeof(SockAddr_TYPE);
 	int ret_val;
+	int ret_sel;
+
+	struct timeval timeout;
+	timeout.tv_sec = 0;
+	timeout.tv_usec = 0;
 
 	if (pTCP == NULL){
 		ret_val = -1;
@@ -775,15 +789,25 @@ int TCP_Client_Recv(void * const Handler, void * const Buffer, int const MaxByte
 		return ret_val;
 	}
 
+    ret_val = TCP_Connect(pTCP);
+    if (ret_val < 0){
+        //printf("connection failed! connect_ret = &d\n", connect_ret);
+        ret_val = -3;
+        return ret_val;
+    }
+
 	if((pTCP->FirstFlag == 1) && (pTCP != NULL)){
 	    FD_ZERO(pTCP->prfds);
 		FD_SET(pTCP->Recv_Socket, pTCP->prfds);
 		pTCP->FirstFlag = 0;
 	}
 
+    FD_ZERO(pTCP->prfds);
+    FD_SET(pTCP->Recv_Socket, pTCP->prfds);
     //监听所有文件描述符(select的第一个参数取当前所有fd的最大值)
 	//<0 错误  =0超时  =1获取到
-    if (select(pTCP->Recv_Socket + 1, pTCP->prfds, NULL, NULL, NULL) < 0) {
+	ret_sel = select(pTCP->Recv_Socket + 1, pTCP->prfds, NULL, NULL, &timeout);
+    if (ret_sel <= 0) {
 #if TCP_UNDER_VXWORKS > 0
 		if (EINTR == errnoGet())
 			return 0;
@@ -791,7 +815,7 @@ int TCP_Client_Recv(void * const Handler, void * const Buffer, int const MaxByte
         if (WSAEINTR == WSAGetLastError())
 			return 0;
 #endif	
-        fprintf(stderr, "%s(): select() error: %d", __FUNCTION__, errno);
+        //fprintf(stderr, "%s(): select() error: %d", __FUNCTION__, errno);
         return -3;	//报错且不能再执行
     }
 
@@ -799,6 +823,7 @@ int TCP_Client_Recv(void * const Handler, void * const Buffer, int const MaxByte
  		//XXX：这里把每一个客户端的信息都存在一个结构里面，应该为每一个链接创建不同的链接来进行通信
 		ret_val = recv(pTCP->Recv_Socket, (char*)Buffer, MaxBytes, 0);
         if (ret_val <= 0) {
+            pTCP->Connected = 0;
             /*对端关闭了， 需要close本端socket, 同时重新初始化客户端的socket*/
 #if TCP_UNDER_VXWORKS > 0
             close(pTCP->Recv_Socket);
@@ -811,6 +836,9 @@ int TCP_Client_Recv(void * const Handler, void * const Buffer, int const MaxByte
 
 			FD_CLR(pTCP->Recv_Socket, pTCP->prfds);
 			return -4;
+        }
+        else{
+            //printf("ret_val > 0\n");
         }
       
     }
@@ -901,15 +929,14 @@ int TCP_Init(TCP_STRUCT_TYPE * const Handler, unsigned int const Peer_IP, unsign
 		if(Mode == 0){
 			pTCP->Send = TCP_Send;
 			pTCP->Recv = TCP_Recv;
-			pTCP->Accepted = 0;
-			pTCP->Connected = 0;
+
 		}else if(Mode == 1){
 			pTCP->Send = TCP_BroadCast_Send;
 			pTCP->Recv = TCP_Server_Recv;
 			// for(i = 0 ; i < CLIENT_MAX_NUM; i++)
 			// 	pTCP->Server_Socket[i] = -1;
-			pTCP->prfds = (fd_set*)malloc(sizeof(fd_set));
-			pTCP->FirstFlag == 1;
+
+
 		}
 
 	}
@@ -933,16 +960,19 @@ int TCP_Init(TCP_STRUCT_TYPE * const Handler, unsigned int const Peer_IP, unsign
 		if(Mode == 0){
 			pTCP->Send = TCP_Send;
 			pTCP->Recv = TCP_Recv;
-			pTCP->Accepted = 0;
-			pTCP->Connected = 0;
+
 		}else if(Mode == 1){
 			pTCP->Send = TCP_Send;
 			pTCP->Recv = TCP_Client_Recv;
-			pTCP->FirstFlag == 1;
+
 		}
 		
 	}
 
+    pTCP->Accepted = 0;
+    pTCP->Connected = 0;
+    pTCP->FirstFlag = 1;
+    pTCP->prfds = (fd_set*)malloc(sizeof(fd_set));
 	return 0;
 	
 }
